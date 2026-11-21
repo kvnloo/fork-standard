@@ -12,3 +12,4 @@ jobs:
       upstream: {{UPSTREAM}}
       fork: {{FORK}}
       branch: '{{BRANCH}}'
+    secrets: inherit
