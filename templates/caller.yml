@@ -1,0 +1,14 @@
+# Lives on the mirror's default branch (_mirror) as .github/workflows/mirror.yml.
+# All logic is in the reusable workflow; bump nothing here.
+name: mirror
+on:
+  schedule: [{cron: '{{CRON}}'}]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  sync:
+    uses: {{TOOLING}}/.github/workflows/mirror-sync.yml@v1
+    with:
+      upstream: {{UPSTREAM}}
+      fork: {{FORK}}
+      branch: '{{BRANCH}}'

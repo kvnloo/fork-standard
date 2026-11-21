@@ -1,0 +1,119 @@
+# Reusable mirror sync. Called from a ~10-line caller on each detached mirror's default
+# branch (templates/caller.yml), so the cron runs in the mirror itself.
+# This file is a thin wrapper: all logic is in scripts/*.sh, which tests/test_sync.sh covers.
+name: mirror-sync
+on:
+  workflow_call:
+    inputs:
+      upstream:
+        description: upstream owner/name (read anonymously; never gets our token)
+        type: string
+        required: true
+      fork:
+        description: our fork owner/name to fast-forward ('' = mirror only)
+        type: string
+        default: ''
+      branch:
+        description: fork branch to fast-forward ('' = upstream's default branch)
+        type: string
+        default: ''
+      fork_sync_method:
+        description: api (merge-upstream, after a git fast-forward pre-check) or push (git push, no force)
+        type: string
+        default: api
+      size_limit_mb:
+        type: number
+        default: 5000
+      keepalive_days:
+        type: number
+        default: 45
+      tooling_repo:
+        description: repo holding this workflow and scripts/ (change once if it moves)
+        type: string
+        default: kvnloo/fork-standard
+      tooling_ref:
+        type: string
+        default: v1
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Secrets live in this environment, which only the _mirror branch may use. Upstream
+    # workflow files pushed to the mirror's other branches can run, but they can't read it.
+    environment: mirror-sync
+    concurrency:
+      group: mirror-sync-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      OUT_DIR: ${{ github.workspace }}/.mirror-out
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      MIRROR_REPO: ${{ github.repository }}
+      MIRROR_URL: ${{ github.server_url }}/${{ github.repository }}.git
+    steps:
+      - name: Mint token for the mirror owner
+        id: mirror-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.MIRROR_APP_ID }}
+          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Work out the fork owner
+        id: meta
+        env:
+          FORK: ${{ inputs.fork }}
+          MIRROR_OWNER: ${{ github.repository_owner }}
+        run: |
+          owner="${FORK%%/*}"
+          echo "fork_owner=$owner" >> "$GITHUB_OUTPUT"
+          if [[ -n "$FORK" && "$owner" != "$MIRROR_OWNER" ]]; then
+            echo "separate=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint token for the fork owner (only if it differs)
+        id: fork-token
+        if: steps.meta.outputs.separate == 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.MIRROR_APP_ID }}
+          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
+          owner: ${{ steps.meta.outputs.fork_owner }}
+
+      - name: Check out sync scripts
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.tooling_repo }}
+          ref: ${{ inputs.tooling_ref }}
+          path: .tooling
+          persist-credentials: false
+
+      - name: Sync upstream -> mirror, fast-forward fork
+        id: sync
+        run: .tooling/scripts/sync.sh
+        env:
+          UPSTREAM_URL: ${{ github.server_url }}/${{ inputs.upstream }}.git
+          UPSTREAM_REPO: ${{ inputs.upstream }}
+          FORK_URL: ${{ inputs.fork != '' && format('{0}/{1}.git', github.server_url, inputs.fork) || '' }}
+          FORK_REPO: ${{ inputs.fork }}
+          FORK_BRANCH: ${{ inputs.branch }}
+          FORK_SYNC_METHOD: ${{ inputs.fork_sync_method }}
+          SIZE_LIMIT_MB: ${{ inputs.size_limit_mb }}
+          MIRROR_TOKEN: ${{ steps.mirror-token.outputs.token }}
+          FORK_TOKEN: ${{ steps.fork-token.outputs.token || steps.mirror-token.outputs.token }}
+          GH_TOKEN: ${{ steps.fork-token.outputs.token || steps.mirror-token.outputs.token }}
+
+      - name: Open, dedup or close alert issues
+        if: always() && steps.sync.outcome != 'skipped'
+        run: .tooling/scripts/alerts.sh
+        env:
+          GH_TOKEN: ${{ steps.mirror-token.outputs.token }}
+
+      - name: Keepalive (60-day schedule auto-disable)
+        if: always() && steps.mirror-token.outcome == 'success'
+        run: .tooling/scripts/keepalive.sh
+        env:
+          MIRROR_TOKEN: ${{ steps.mirror-token.outputs.token }}
+          KEEPALIVE_DAYS: ${{ inputs.keepalive_days }}
+          WORKFLOW_FILE: mirror.yml
+          GH_TOKEN: ${{ steps.mirror-token.outputs.token }}
