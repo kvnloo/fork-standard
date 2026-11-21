@@ -1,0 +1,6 @@
+# forks.txt: one fork per line. Onboard them all with: scripts/onboard.sh --all forks.txt [--apply]
+# <our fork>              <upstream>                  <branch to FF, '-' = upstream default>
+kvnloo/hermes-android     rusty4444/ares              main
+kvnloo/hermex             uzairansaruzi/hermex        master
+kvnloo/hermes-agent       NousResearch/hermes-agent   main
+# kvnloo/glide            alt-glitch/hermes-tern      -     # on hold: glide's main is our code (owner decision pending)
