@@ -1,0 +1,34 @@
+# Source of truth for kvnloo/fork-standard .github/workflows/fork-backups.yml (public runner repo:
+# public Actions minutes are free; kvnloo/home is private). All logic stays in kvnloo/home
+# tools/fork-standard; this file only checks it out with the token and runs it.
+# Update the runner with: tools/fork-standard/scripts/publish-runner.sh
+name: fork-backups
+on:
+  schedule: [{cron: '37 6 * * *'}]
+  workflow_dispatch:
+    inputs:
+      max_new: {description: max new mirrors this run, default: '40'}
+      dry_run: {description: '1 = only print', default: '0'}
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    environment: fork-backups
+    steps:
+      - uses: actions/checkout@v5
+        with: {repository: kvnloo/home, token: '${{ secrets.FORK_BACKUP_TOKEN }}', sparse-checkout: tools/fork-standard, persist-credentials: false}
+      - run: bash tools/fork-standard/tests/test_sync.sh
+  onboard:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: fork-backups
+    steps:
+      - uses: actions/checkout@v5
+        with: {repository: kvnloo/home, token: '${{ secrets.FORK_BACKUP_TOKEN }}', sparse-checkout: tools/fork-standard, persist-credentials: false}
+      - run: gh auth setup-git && tools/fork-standard/scripts/auto-onboard.sh
+        env:
+          FORK_BACKUP_TOKEN: ${{ secrets.FORK_BACKUP_TOKEN }}
+          GH_TOKEN: ${{ secrets.FORK_BACKUP_TOKEN }}
+          MAX_NEW: ${{ inputs.max_new || '40' }}
+          DRY_RUN: ${{ inputs.dry_run || '0' }}
