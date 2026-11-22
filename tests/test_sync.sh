@@ -334,7 +334,7 @@ env PATH="$T/bin:$PATH" bash "$ROOT/scripts/onboard.sh" kvnloo/hermex --upstream
 sed 's/^/  | /' "$T/onb.log"
 check "onboard exit 0" eq "$ORC" 0
 check "dry run: nothing executed (no gh calls)" eval '! grep -q "repo create" $T/gh/calls.log'
-check "prints the repo create command" grep -qF "gh repo create kvnloo/mirror--uzairansaruzi--hermex --public" "$T/onb.log"
+check "prints the repo create command" grep -qF "gh repo create kvnloo/hermex-backup --public" "$T/onb.log"
 awk '/^----- BEGIN caller/{f=1;next}/^----- END caller/{f=0}f' "$T/onb.log" > "$T/caller.yml"
 check "rendered caller parses as YAML" python3 -c "import sys,yaml; d=yaml.safe_load(open(sys.argv[1])); assert d['jobs']['sync']['with']['upstream']=='uzairansaruzi/hermex'" "$T/caller.yml"
 check "rendered caller is <= 15 lines" eval '(( $(grep -cv "^\s*\(#.*\)\?$" $T/caller.yml) <= 15 ))'
