@@ -1,13 +1,16 @@
 # Source of truth for kvnloo/fork-standard .github/workflows/fork-backups.yml (public runner repo:
 # public Actions minutes are free; kvnloo/home is private). All logic stays in kvnloo/home
 # tools/fork-standard; this file only checks it out with the token and runs it.
-# Update the runner with: tools/fork-standard/scripts/publish-runner.sh
+# Update the runner with: tools/fork-standard/scripts/publish-runner.sh (a normal commit, never a
+# force-push: GitHub only registers a schedule from a regular push to the default branch).
+# The run goes red when any onboard, heal or backup sync failed (auto-onboard.sh exits 1).
 name: fork-backups
 on:
-  schedule: [{cron: '37 6 * * *'}]
+  schedule: [{cron: '41 6 * * *'}]
   workflow_dispatch:
     inputs:
       max_new: {description: max new mirrors this run, default: '40'}
+      only: {description: 'only these forks (comma list, e.g. hermes-android,glide); empty = all', default: ''}
       dry_run: {description: '1 = only print', default: '0'}
 permissions: {contents: read}
 jobs:
@@ -17,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: {repository: kvnloo/home, token: '${{ secrets.FORK_BACKUP_TOKEN }}', sparse-checkout: tools/fork-standard, persist-credentials: false}
-      - run: bash tools/fork-standard/tests/test_sync.sh
+      - run: rc=0; for t in tools/fork-standard/tests/test_*.sh; do bash "$t" || rc=1; done; exit $rc
   onboard:
     needs: test
     runs-on: ubuntu-latest
@@ -31,4 +34,5 @@ jobs:
           FORK_BACKUP_TOKEN: ${{ secrets.FORK_BACKUP_TOKEN }}
           GH_TOKEN: ${{ secrets.FORK_BACKUP_TOKEN }}
           MAX_NEW: ${{ inputs.max_new || '40' }}
+          ONLY: ${{ inputs.only || '' }}
           DRY_RUN: ${{ inputs.dry_run || '0' }}

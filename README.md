@@ -7,4 +7,6 @@ under `tools/fork-standard/` (cataloged in its `map/`). Don't edit here; edit th
 
 What it does: every fork of `kvnloo/*` that holds our commits gets a detached `kvnloo/<fork>-backup`
 repo. That backup syncs itself daily: upstream branches + tags, upstream PR heads (`_pr/<n>`), our
-fork's branches (`_fork/<branch>`), and it fast-forwards the fork's `main` to upstream. Nothing is dropped.
+fork's branches (`_fork/<branch>`), issues/PRs/comments as JSON (`_meta`), and it fast-forwards the
+fork's `main` to upstream. Nothing is dropped. The runner also re-registers and re-dispatches any
+backup whose sync stopped, and goes red when anything failed.
