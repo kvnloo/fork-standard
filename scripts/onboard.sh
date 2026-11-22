@@ -7,15 +7,14 @@
 #   --branch name           fork branch to fast-forward (default: upstream's default branch)
 #   --size-kb N             upstream size in KB (default: read-only lookup)
 #   --mirror-owner name     where mirrors live (default: $MIRROR_OWNER or the fork's owner)
-#   --prefix str            mirror repo name prefix (default: $MIRROR_PREFIX or "mirror--")
+#   --no-ff                 mirror only; do not fast-forward the fork (its default branch holds our commits)
 #   --tooling owner/name    repo with the reusable workflow (default: kvnloo/fork-standard)
 #   --allow-large           allow mirrors over 5 GB (owner approval given)
 #   --reenable              only print/run the command that re-enables a disabled schedule
 #   --all FILE              onboard every line of FILE (forks.txt format)
 #   --apply                 actually run the commands
 #
-# Env for --apply: MIRROR_APP_ID, MIRROR_APP_KEY_FILE (path to the App's .pem),
-#   MIRROR_APP_INSTALLATION_ID (only if the App is installed on selected repos, not all).
+# Env for --apply: FORK_BACKUP_TOKEN (classic PAT, repo + workflow scopes; stored as the env secret MIRROR_TOKEN).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 LIMIT_KB=$((5 * 1024 * 1024))
@@ -23,7 +22,7 @@ LIMIT_KB=$((5 * 1024 * 1024))
 usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 FORK="" UPSTREAM="" BRANCH="" SIZE_KB="" APPLY=0 ALLOW_LARGE=0 REENABLE=0 ALL=""
-MOWNER="${MIRROR_OWNER:-}" PREFIX="${MIRROR_PREFIX-mirror--}" TOOLING="kvnloo/fork-standard"
+MOWNER="${MIRROR_OWNER:-}" PREFIX="" SUFFIX="${MIRROR_SUFFIX--backup}" NOFF=0 TOOLING="kvnloo/fork-standard"
 while (($#)); do
   case "$1" in
     --upstream) UPSTREAM="$2"; shift ;;
@@ -33,6 +32,7 @@ while (($#)); do
     --prefix) PREFIX="$2"; shift ;;
     --tooling) TOOLING="$2"; shift ;;
     --allow-large) ALLOW_LARGE=1 ;;
+    --no-ff) NOFF=1 ;;
     --reenable) REENABLE=1 ;;
     --all) ALL="$2"; shift ;;
     --apply) APPLY=1 ;;
@@ -69,7 +69,7 @@ if [[ -z "$UPSTREAM" || -z "$SIZE_KB" || -z "$BRANCH" ]]; then
 fi
 
 MOWNER="${MOWNER:-${FORK%%/*}}"
-MIRROR="$MOWNER/${PREFIX}${UPSTREAM%%/*}--${UPSTREAM#*/}"
+MIRROR="$MOWNER/${FORK#*/}${SUFFIX}"
 h=$(printf '%s' "$MIRROR" | cksum | cut -d' ' -f1)
 CRON="$((h % 60)) $(((h / 60) % 24)) * * *"   # daily, spread so 300 mirrors don't all fire at once
 
@@ -86,7 +86,8 @@ fi
 
 D="$(mktemp -d)"
 mkdir -p "$D/.github/workflows"
-sed -e "s#{{UPSTREAM}}#$UPSTREAM#; s#{{FORK}}#$FORK#; s#{{BRANCH}}#$BRANCH#; s#{{CRON}}#$CRON#; s#{{TOOLING}}#$TOOLING#" \
+FFORK="$FORK"; ((NOFF)) && FFORK=""
+sed -e "s#{{UPSTREAM}}#$UPSTREAM#; s#{{FORK}}#$FFORK#; s#{{BRANCH}}#$BRANCH#; s#{{CRON}}#$CRON#; s#{{TOOLING}}#$TOOLING#" \
   "$HERE/templates/caller.yml" > "$D/.github/workflows/mirror.yml"
 cat > "$D/README.md" <<EOF
 # Detached mirror of [$UPSTREAM](https://github.com/$UPSTREAM)
@@ -108,26 +109,24 @@ echo "# files to push on _mirror (in $D):"
 echo "----- BEGIN caller .github/workflows/mirror.yml"; cat "$D/.github/workflows/mirror.yml"; echo "----- END caller"
 
 ENV_JSON='{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
-POLICY_JSON="{\"github_owned_allowed\":false,\"verified_allowed\":false,\"patterns_allowed\":[\"actions/checkout@*\",\"actions/create-github-app-token@*\",\"$TOOLING/.github/workflows/mirror-sync.yml@*\"]}"
+POLICY_JSON="{\"github_owned_allowed\":false,\"verified_allowed\":false,\"patterns_allowed\":[\"actions/checkout@*\",\"$TOOLING/.github/workflows/mirror-sync.yml@*\"]}"
 cmds=(
   "gh repo view $MIRROR >/dev/null 2>&1 || gh repo create $MIRROR --public --disable-wiki --description 'Detached backup mirror of $UPSTREAM (not a fork). Default branch _mirror = sync workflow only.'"
   "git -C $D init -q -b _mirror && git -C $D add -A && git -C $D commit -q -m 'chore(mirror): add sync caller' && git -C $D push -q https://github.com/$MIRROR.git _mirror"
   "gh repo edit $MIRROR --default-branch _mirror --enable-issues --enable-wiki=false --enable-projects=false"
   "gh api -X PUT repos/$MIRROR/environments/mirror-sync --input - <<<'$ENV_JSON'"
   "gh api -X POST repos/$MIRROR/environments/mirror-sync/deployment-branch-policies -f name=_mirror -f type=branch"
-  "gh variable set MIRROR_APP_ID --env mirror-sync -R $MIRROR --body \"\$MIRROR_APP_ID\""
-  "gh secret set MIRROR_APP_PRIVATE_KEY --env mirror-sync -R $MIRROR < \"\$MIRROR_APP_KEY_FILE\""
+    "gh secret set MIRROR_TOKEN --env mirror-sync -R $MIRROR < <(printf %s \"\$FORK_BACKUP_TOKEN\")"
   "gh api -X PUT repos/$MIRROR/actions/permissions -F enabled=true -f allowed_actions=selected"
   "gh api -X PUT repos/$MIRROR/actions/permissions/selected-actions --input - <<<'$POLICY_JSON'"
   "gh api -X PUT repos/$MIRROR/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false"
-  "[ -z \"\${MIRROR_APP_INSTALLATION_ID:-}\" ] || gh api -X PUT user/installations/\$MIRROR_APP_INSTALLATION_ID/repositories/\$(gh api repos/$MIRROR --jq .id)"
-  "gh api repos/$FORK/branches/staging --silent 2>/dev/null || gh api -X POST repos/$FORK/git/refs -f ref=refs/heads/staging -f sha=\$(gh api repos/$FORK/commits/$BRANCH --jq .sha)"
+  "[ $NOFF = 1 ] || gh api repos/$FORK/branches/staging --silent 2>/dev/null || gh api -X POST repos/$FORK/git/refs -f ref=refs/heads/staging -f sha=\$(gh api repos/$FORK/commits/$BRANCH --jq .sha)"
   "gh workflow run mirror.yml -R $MIRROR"
   "grep -q '^$FORK ' $HERE/forks.txt 2>/dev/null || echo '$FORK $UPSTREAM $BRANCH' >> $HERE/forks.txt"
 )
 
 if (( APPLY )); then
-  : "${MIRROR_APP_ID:?set MIRROR_APP_ID}" "${MIRROR_APP_KEY_FILE:?set MIRROR_APP_KEY_FILE}"
+  : "${FORK_BACKUP_TOKEN:?set FORK_BACKUP_TOKEN}"
   for c in "${cmds[@]}"; do echo "+ $c"; bash -c "$c"; done
   echo "onboarded $FORK -> $MIRROR"
 else

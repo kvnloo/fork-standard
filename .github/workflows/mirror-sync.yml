@@ -51,35 +51,6 @@ jobs:
       MIRROR_REPO: ${{ github.repository }}
       MIRROR_URL: ${{ github.server_url }}/${{ github.repository }}.git
     steps:
-      - name: Mint token for the mirror owner
-        id: mirror-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.MIRROR_APP_ID }}
-          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
-      - name: Work out the fork owner
-        id: meta
-        env:
-          FORK: ${{ inputs.fork }}
-          MIRROR_OWNER: ${{ github.repository_owner }}
-        run: |
-          owner="${FORK%%/*}"
-          echo "fork_owner=$owner" >> "$GITHUB_OUTPUT"
-          if [[ -n "$FORK" && "$owner" != "$MIRROR_OWNER" ]]; then
-            echo "separate=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Mint token for the fork owner (only if it differs)
-        id: fork-token
-        if: steps.meta.outputs.separate == 'true'
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.MIRROR_APP_ID }}
-          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
-          owner: ${{ steps.meta.outputs.fork_owner }}
-
       - name: Check out sync scripts
         uses: actions/checkout@v5
         with:
@@ -99,21 +70,21 @@ jobs:
           FORK_BRANCH: ${{ inputs.branch }}
           FORK_SYNC_METHOD: ${{ inputs.fork_sync_method }}
           SIZE_LIMIT_MB: ${{ inputs.size_limit_mb }}
-          MIRROR_TOKEN: ${{ steps.mirror-token.outputs.token }}
-          FORK_TOKEN: ${{ steps.fork-token.outputs.token || steps.mirror-token.outputs.token }}
-          GH_TOKEN: ${{ steps.fork-token.outputs.token || steps.mirror-token.outputs.token }}
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          FORK_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          GH_TOKEN: ${{ secrets.MIRROR_TOKEN }}
 
       - name: Open, dedup or close alert issues
         if: always() && steps.sync.outcome != 'skipped'
         run: .tooling/scripts/alerts.sh
         env:
-          GH_TOKEN: ${{ steps.mirror-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.MIRROR_TOKEN }}
 
       - name: Keepalive (60-day schedule auto-disable)
-        if: always() && steps.mirror-token.outcome == 'success'
+        if: always()
         run: .tooling/scripts/keepalive.sh
         env:
-          MIRROR_TOKEN: ${{ steps.mirror-token.outputs.token }}
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
           KEEPALIVE_DAYS: ${{ inputs.keepalive_days }}
           WORKFLOW_FILE: mirror.yml
-          GH_TOKEN: ${{ steps.mirror-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.MIRROR_TOKEN }}
